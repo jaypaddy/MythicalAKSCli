@@ -117,6 +117,11 @@ read input
 
 #Check if cluster already exists, if it does, then skip cluster creation
 echo "Generating AKS Creation Command"
+
+#--service-principal $SERVICE_PRINCIPAL_ID 
+#--client-secret $SERVICE_PRINCIPAL_SECRET 
+#--kubernetes-version
+#
 # Deploy AKS Cluster
 AKS_CREATE_CMD="az aks create \
 --resource-group ${CLUSTER_RESOURCE_GROUP} \

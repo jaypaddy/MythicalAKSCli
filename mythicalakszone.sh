@@ -29,10 +29,15 @@ ACR_NAME=$NAME
 DNS_NAME_PREFIX="paddyinc" 
 NODEPOOL_NAME="nodepool1" 
 CLUSTER_AZURE_SUB_ID="881ac365-d417-4791-b2a9-48789acbb88d" 
-PUBLIC_IP_RESOURCE_GROUP=$NETWORK_RESOURCE_GROUP  
-PUBLIC_IP_RESOURCE_ID="" 
-PUBLIC_IP_NAME="mythicalakszone-pip" 
+EGRESS_PUBLIC_IP_RESOURCE_GROUP=$NETWORK_RESOURCE_GROUP  
+EGRESS_PUBLIC_IP_RESOURCE_ID="" 
+EGRESS_PUBLIC_IP_NAME="mythicalakszone-egress-pip" 
+INGRESS_PUBLIC_IP_RESOURCE_GROUP=$NETWORK_RESOURCE_GROUP  
+INGRESS_PUBLIC_IP_RESOURCE_ID="" 
+INGRESS_PUBLIC_IP_DNS_LABEL="mythicalakszone"
+INGRESS_PUBLIC_IP_NAME="mythicalakszone-ingress-pip" 
 REGIONAL_ZONES="1 2 3"
+
 
 # Login to Azure 
 echo "login with your Corp/Enterprise Azure AD Tenant"
@@ -65,31 +70,44 @@ echo $CLUSTER_SUBNET_ID
 echo "Press to continue..."
 read input
 
-echo "Get or Create Public IP for Outbound"
+echo "Get or Create Egress Public IP for Outbound"
 # If there is a  Public IP Address, use it, else, create a new Public IP
-if [ -z "$PUBLIC_IP_RESOURCE_ID" ]
+if [ -z "$EGRESS_PUBLIC_IP_RESOURCE_ID" ]
 then
     # Create a Standard Zone Redundant Public IP for Load Balancer Outbound Communication
     echo "Creating Public IP"
-    az network public-ip create   -g $PUBLIC_IP_RESOURCE_GROUP \
-                                -n $PUBLIC_IP_NAME \
+    az network public-ip create -g $EGRESS_PUBLIC_IP_RESOURCE_GROUP \
+                                -n $EGRESS_PUBLIC_IP_NAME \
                                 --sku Standard 
     #Build logic to check for errors
-    PUBLIC_IP_RESOURCE_ID=$(az network public-ip show -g $NETWORK_RESOURCE_GROUP  -n $PUBLIC_IP_NAME --query "id" --output tsv)
+    EGRESS_PUBLIC_IP_RESOURCE_ID=$(az network public-ip show -g $NETWORK_RESOURCE_GROUP  -n $EGRESS_PUBLIC_IP_NAME --query "id" --output tsv)
 fi
-echo "Using ${PUBLIC_IP_RESOURCE_ID}"
+echo "Using ${EGRESS_PUBLIC_IP_RESOURCE_ID} for Outbound"
 echo "Press to continue..."
 read input
+
+echo "Get or Create Ingress Public IP for Outbound"
+# If there is a  Public IP Address, use it, else, create a new Public IP
+if [ -z "$INGRESS_PUBLIC_IP_RESOURCE_ID" ]
+then
+    # Create a Standard Zone Redundant Public IP for Load Balancer Outbound Communication
+    echo "Creating Public IP"
+    az network public-ip create   -g $INGRESS_PUBLIC_IP_RESOURCE_GROUP \
+                                -n $INGRESS_PUBLIC_IP_NAME \
+                                --dns-name $INGRESS_PUBLIC_IP_DNS_LABEL \
+                                --sku Standard 
+    #Build logic to check for errors
+    INGRESS_PUBLIC_IP_RESOURCE_ID=$(az network public-ip show -g $INGRESS_PUBLIC_IP_RESOURCE_GROUP  -n $INGRESS_PUBLIC_IP_NAME --query "id" --output tsv)
+fi
+echo "Using ${INGRESS_PUBLIC_IP_RESOURCE_ID} for Outbound"
+echo "Press to continue..."
+read input
+
 
 echo "Create Azure Container Registry"
 az acr create -n $ACR_NAME -g $CLUSTER_RESOURCE_GROUP --sku Standard
 echo "Press to continue...Next is AKS Cluster Depeloyment"
 read input
-
-
-
-
-#Check if cluster already exists, if it does, then skip cluster creation
 
 
 echo "Generating AKS Creation Command"
@@ -114,35 +132,63 @@ AKS_CREATE_CMD="az aks create \
 --vm-set-type VirtualMachineScaleSets \
 --attach-acr ${ACR_NAME} \
 --load-balancer-sku standard \
---load-balancer-outbound-ips ${PUBLIC_IP_RESOURCE_ID} \
+--load-balancer-outbound-ips ${EGRESS_PUBLIC_IP_RESOURCE_ID} \
 --enable-managed-identity \
 --zones ${REGIONAL_ZONES}"
 
 echo $AKS_CREATE_CMD
 echo
-echo
-echo
 echo "Deploy AKS"
 echo "Press to execute Cluster Creation..."
 read input
 $AKS_CREATE_CMD
-#echo $CMD_OUT
 
 echo "Cluster Deployment Done"
 MANAGED_IDENTITY_ID=$(az aks show  --name ${CLUSTER_NAME} --resource-group ${CLUSTER_RESOURCE_GROUP} --query "identity.principalId" --output tsv)
 echo "Managed Identity ${MANAGED_IDENTITY_ID}"
 
-#echo "Grant Network Contributor Role to ${MANAGED_IDENTITY_ID} for AKS Cluster Subnet ${CLUSTER_SUBNET_ID}"
-#az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $CLUSTER_SUBNET_ID --role "Network Contributor"
+#--attach-acr assigns permissions for the managed identity to pull from Azure container registry
 
-echo "Grant Contributor Role to ${MANAGED_IDENTITY_ID} for Load Balancer PublicIp  ${PUBLIC_IP_RESOURCE_ID}"
-az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $PUBLIC_IP_RESOURCE_ID --role "Contributor"
+echo "Grant Network Contributor Role to ${MANAGED_IDENTITY_ID} for AKS Cluster Subnet ${CLUSTER_SUBNET_ID}"
+az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $CLUSTER_SUBNET_ID --role "Network Contributor"
+
+echo "Grant Contributor Role to ${MANAGED_IDENTITY_ID} for Load Balancer Egress PublicIp Resource Group ${INGRESS_PUBLIC_IP_RESOURCE_GROUP}"
+INGRESS_PUBLIC_IP_RESOURCE_GROUP_ID = 
+az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $EGRESS_PUBLIC_IP_RESOURCE_ID --role "Contributor"
+
+#Create a service using the static IP address for ingress
+#https://docs.microsoft.com/en-us/azure/aks/static-ip#create-a-service-using-the-static-ip-address
+#Grant Access for the Identity of the Cluster to the resource group with Public IP for Inbound
+#Also ensure that the PublicIP specified for outbound is also setup in the YAML files for the service
+#In this case the NGINX service file will need to include the following
+#annotations:
+    #service.beta.kubernetes.io/azure-load-balancer-resource-group: mythicalakszone_RG
+    #service.beta.kubernetes.io/azure-dns-label-name: mythicalakszone
+#spec:
+  #loadBalancerIP: X.X.X.X 
+
+#Get the Resource Group for 
+INGRESS_PUBLIC_IP_RESOURCEGROUP_ID=$(az group show --name ${INGRESS_PUBLIC_IP_RESOURCE_GROUP}  --query "id" --output tsv)
+az role assignment create \
+    --assignee $MANAGED_IDENTITY_ID \
+    --role "Network Contributor" \
+    --scope $INGRESS_PUBLIC_IP_RESOURCEGROUP_ID
+
 
 echo "Script Ended - Cluster Deployment Done"
 echo "Press to Exit."
 read input
 
 echo "#########################################################################"
+#to Deploy NGINX, please use the YAML files from NGINX's Github repo
+#https://docs.nginx.com/nginx-ingress-controller/installation/installation-with-manifests/
+#Update loadbalancer.yaml in service folder to include the following
+#annotations:
+    #service.beta.kubernetes.io/azure-load-balancer-resource-group: ${INGRESS_PUBLIC_IP_RESOURCE_GROUP}
+    #service.beta.kubernetes.io/azure-dns-label-name: ${INGRESS_PUBLIC_IP_DNS_LABEL}
+#spec:
+  #loadBalancerIP: X.X.X.X 
+
 echo "az aks get-credentials -g ${CLUSTER_RESOURCE_GROUP} -n ${CLUSTER_NAME}"
 echo "kubectl get nodes"
 echo "kubectl describe nodes | grep -e \"Name:\" -e \"failure-domain.beta.kubernetes.io/zone\""
