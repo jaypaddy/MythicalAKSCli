@@ -152,8 +152,7 @@ echo "Managed Identity ${MANAGED_IDENTITY_ID}"
 echo "Grant Network Contributor Role to ${MANAGED_IDENTITY_ID} for AKS Cluster Subnet ${CLUSTER_SUBNET_ID}"
 az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $CLUSTER_SUBNET_ID --role "Network Contributor"
 
-echo "Grant Contributor Role to ${MANAGED_IDENTITY_ID} for Load Balancer Egress PublicIp Resource Group ${INGRESS_PUBLIC_IP_RESOURCE_GROUP}"
-INGRESS_PUBLIC_IP_RESOURCE_GROUP_ID = 
+echo "Grant Contributor Role to ${MANAGED_IDENTITY_ID} for Load Balancer Egress PublicIp Resource Group ${EGRESS_PUBLIC_IP_RESOURCE_GROUP}"
 az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $EGRESS_PUBLIC_IP_RESOURCE_ID --role "Contributor"
 
 #Create a service using the static IP address for ingress
