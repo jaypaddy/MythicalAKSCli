@@ -29,6 +29,11 @@ helm install nginx-ingress stable/nginx-ingress \
     --set controller.service.loadBalancerIP=52.146.61.250
 
 
+# Create a namespace for your ingress resources
+kubectl create namespace ingress-basic
+
+# Add the official stable repository
+helm repo add stable https://kubernetes-charts.storage.googleapis.com/
 
 kubectl apply -f aks-helloworld-one.yaml --namespace ingress-basic
 kubectl apply -f aks-helloworld-two.yaml --namespace ingress-basic

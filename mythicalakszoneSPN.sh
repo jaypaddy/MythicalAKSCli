@@ -7,11 +7,11 @@ On reruns it does not error if public ip already exists"
 echo "Container Registry."
 echo "AKS Cluster with:"
 echo "3 Zones"
-echo "Managed Identity"
+echo "User assigned Service Principal"
 echo "Load Balancer Outbound IP"
 echo "Autoscale"
 
-NAME="mythicalakszone" 
+NAME="mythicalakszonespn" 
 CLUSTER_RESOURCE_GROUP=$NAME"_RG" 
 CLUSTER_NAME=$NAME 
 LOCATION="eastus" 
@@ -31,12 +31,14 @@ NODEPOOL_NAME="nodepool1"
 CLUSTER_AZURE_SUB_ID="881ac365-d417-4791-b2a9-48789acbb88d" 
 EGRESS_PUBLIC_IP_RESOURCE_GROUP=$NETWORK_RESOURCE_GROUP  
 EGRESS_PUBLIC_IP_RESOURCE_ID="" 
-EGRESS_PUBLIC_IP_NAME="mythicalakszone-egress-pip" 
+EGRESS_PUBLIC_IP_NAME=$NAME"-egress-pip" 
 INGRESS_PUBLIC_IP_RESOURCE_GROUP=$NETWORK_RESOURCE_GROUP  
 INGRESS_PUBLIC_IP_RESOURCE_ID="" 
-INGRESS_PUBLIC_IP_DNS_LABEL="mythicalakszone"
-INGRESS_PUBLIC_IP_NAME="mythicalakszone-ingress-pip" 
+INGRESS_PUBLIC_IP_DNS_LABEL=$NAME
+INGRESS_PUBLIC_IP_NAME=$NAME"-ingress-pip" 
 INGRESS_PUBLIC_IP=""
+CLUSTER_SERVICEPRINCIPAL_ID=""
+CLUSTER_SERVICEPRINCIPAL_SECRET=""
 REGIONAL_ZONES="1 2 3"
 
 
@@ -45,6 +47,23 @@ echo "login with your Corp/Enterprise Azure AD Tenant"
 az login  
 echo "Press to continue..."
 read input
+
+
+# Create Service Principal
+echo "Get or Create Cluster Service Principal"
+if [ -z "$CLUSTER_SERVICEPRINCIPAL_ID" ]
+then
+    # Create a Service Principal
+    az ad sp create-for-rbac --name $CLUSTER_NAME --skip-assignment
+    read -p "Please specify Service Principal Id: " CLUSTER_SERVICEPRINCIPAL_ID
+    read -p "Please specify Service Principal password: " CLUSTER_SERVICEPRINCIPAL_SECRET
+    echo "Creating Service Principal"
+    #CLUSTER_SERVICEPRINCIPAL_ID=$(az ad sp create-for-rbac --name $CLUSTER_NAME --skip-assignment --query [appId] -o tsv)
+fi
+echo "Press to continue..."
+read input
+
+
 
 # Create an Azure resource group
 echo "Creating AKS Cluster Resource Group - ${CLUSTER_RESOURCE_GROUP}"
@@ -82,7 +101,6 @@ then
                                 --sku Standard 
     #Build logic to check for errors
     EGRESS_PUBLIC_IP_RESOURCE_ID=$(az network public-ip show -g $NETWORK_RESOURCE_GROUP  -n $EGRESS_PUBLIC_IP_NAME --query "id" --output tsv)
-    INGRESS_PUBLIC_IP=$(az network public-ip show -g $NETWORK_RESOURCE_GROUP  -n $EGRESS_PUBLIC_IP_NAME --query "ipAddress" --output tsv)
 fi
 echo "Using ${EGRESS_PUBLIC_IP_RESOURCE_ID} for Outbound"
 echo "Press to continue..."
@@ -100,6 +118,7 @@ then
                                 --sku Standard 
     #Build logic to check for errors
     INGRESS_PUBLIC_IP_RESOURCE_ID=$(az network public-ip show -g $INGRESS_PUBLIC_IP_RESOURCE_GROUP  -n $INGRESS_PUBLIC_IP_NAME --query "id" --output tsv)
+    INGRESS_PUBLIC_IP=$(az network public-ip show -g $NETWORK_RESOURCE_GROUP  -n $EGRESS_PUBLIC_IP_NAME --query "ipAddress" --output tsv)
 fi
 echo "Using ${INGRESS_PUBLIC_IP_RESOURCE_ID} for Outbound"
 echo "Press to continue..."
@@ -135,7 +154,8 @@ AKS_CREATE_CMD="az aks create \
 --attach-acr ${ACR_NAME} \
 --load-balancer-sku standard \
 --load-balancer-outbound-ips ${EGRESS_PUBLIC_IP_RESOURCE_ID} \
---enable-managed-identity \
+--service-principal $CLUSTER_SERVICEPRINCIPAL_ID \
+--client-secret $CLUSTER_SERVICEPRINCIPAL_SECRET \
 --zones ${REGIONAL_ZONES}"
 
 echo $AKS_CREATE_CMD
@@ -146,16 +166,17 @@ read input
 $AKS_CREATE_CMD
 
 echo "Cluster Deployment Done"
-MANAGED_IDENTITY_ID=$(az aks show  --name ${CLUSTER_NAME} --resource-group ${CLUSTER_RESOURCE_GROUP} --query "identity.principalId" --output tsv)
-echo "Managed Identity ${MANAGED_IDENTITY_ID}"
 
 #--attach-acr assigns permissions for the managed identity to pull from Azure container registry
+echo "Grant Network Contributor Role to ${CLUSTER_SERVICEPRINCIPAL_ID} for AKS Cluster Subnet ${CLUSTER_SUBNET_ID}"
+az role assignment create --assignee $CLUSTER_SERVICEPRINCIPAL_ID --scope $CLUSTER_SUBNET_ID --role "Network Contributor"
+echo "Press to Continue."
+read input
 
-echo "Grant Network Contributor Role to ${MANAGED_IDENTITY_ID} for AKS Cluster Subnet ${CLUSTER_SUBNET_ID}"
-az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $CLUSTER_SUBNET_ID --role "Network Contributor"
-
-echo "Grant Contributor Role to ${MANAGED_IDENTITY_ID} for Load Balancer Egress PublicIp Resource Group ${EGRESS_PUBLIC_IP_RESOURCE_GROUP}"
-az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $EGRESS_PUBLIC_IP_RESOURCE_ID --role "Contributor"
+echo "Grant Contributor Role to ${CLUSTER_SERVICEPRINCIPAL_ID} for Load Balancer Egress PublicIp Resource Group ${EGRESS_PUBLIC_IP_RESOURCE_GROUP}"
+az role assignment create --assignee $CLUSTER_SERVICEPRINCIPAL_ID --scope $EGRESS_PUBLIC_IP_RESOURCE_ID --role "Contributor"
+echo "Press to Continue."
+read input
 
 #Create a service using the static IP address for ingress
 #https://docs.microsoft.com/en-us/azure/aks/static-ip#create-a-service-using-the-static-ip-address
@@ -171,7 +192,7 @@ az role assignment create --assignee $MANAGED_IDENTITY_ID --scope $EGRESS_PUBLIC
 #Get the Resource Group for 
 INGRESS_PUBLIC_IP_RESOURCEGROUP_ID=$(az group show --name ${INGRESS_PUBLIC_IP_RESOURCE_GROUP}  --query "id" --output tsv)
 az role assignment create \
-    --assignee $MANAGED_IDENTITY_ID \
+    --assignee $CLUSTER_SERVICEPRINCIPAL_ID \
     --role "Network Contributor" \
     --scope $INGRESS_PUBLIC_IP_RESOURCEGROUP_ID
 
